@@ -20,7 +20,7 @@ import argparse
 from nanosam.utils.predictor import Predictor
 from nanosam.utils.tracker import Tracker
 
-# JE 
+# JE
 import nvtx, time
 import ctypes as ct
 from yolo.darknet import darknet
@@ -29,11 +29,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--image_encoder", type=str, default="data/resnet18_image_encoder.engine")
 parser.add_argument("--mask_decoder", type=str, default="data/mobile_sam_mask_decoder.engine")
 
-# JE : args for darknet
-
-parser.add_argument("--darknet_cfg", type=str, default="/home/vetsagong/nanosam-implementation/yolo/custom_data/yolov4-tiny-custom.cfg")
-parser.add_argument("--darknet_data", type=str, default="/home/vetsagong/nanosam-implementation/yolo/custom_data/obj.names")
-parser.add_argument("--darknet_weights", type=str, default="/home/vetsagong/nanosam-implementation/yolo/custom_data/yolov4-tiny-custom_best.weights")
+# JE : args for darknet (yolov4-tiny)
+parser.add_argument("--darknet_cfg", type=str, default="/home/vetsagong/spring/nanosam/yolo/custom_data/yolov4-tiny-custom.cfg")
+parser.add_argument("--darknet_data", type=str, default="/home/vetsagong/spring/nanosam/yolo/custom_data/obj.names")
+parser.add_argument("--darknet_weights", type=str, default="/home/vetsagong/spring/nanosam/yolo/custom_data/yolov4-tiny-custom_best.weights")
 
 args = parser.parse_args()
 
@@ -62,7 +61,18 @@ def cv2_to_pil(image):
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     return PIL.Image.fromarray(image) 
     
+# JE
+def save_coordinates(point):
+    # Save the point coordinates to a file
+    with open('point_coordinates.txt', 'w') as file:
+        # point is a tuple (x, y)
+        x, y = point
+        file.write(f"{x}, {y}\n")
+
+            
+# JE
 def pil_to_image(pil_image):
+    
     # Convert PIL image to NumPy array
     image_array = np.array(pil_image).astype(np.float32)  # Convert to float32
     
@@ -83,13 +93,83 @@ def pil_to_image(pil_image):
     
     # Create IMAGE structure
     image_yolo = darknet.IMAGE(width, height, channels, data_ptr)
+    
     return image_yolo
 
-image_path = "/home/vetsagong/nanosam-implementation/yolo/custom_data/TEST2.jpg"
+      
+""" ********************** VERSION 0 : Test by using image *********************
+    
+# JE : Convert the read jpg file to image struct
+def jpg_to_image_struct(image_path):
+    
+    # Read jpg image
+    width = darknet.network_width(network)
+    height = darknet.network_height(network)
+    darknet_image = darknet.make_image(width, height, 3)
+    
+    image = cv2.imread(image_path)
+    
+    # Convert to RGB format
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    image_resized = cv2.resize(image_rgb, (width, height),
+                               interpolation=cv2.INTER_LINEAR)
+    
+    darknet.copy_image_from_bytes(darknet_image, image_resized.tobytes())
+   
+    return darknet_image
 
-# Example usage:
-# image_path = "example.jpg"
-# image = load_image(image_path)
+image_path = "/home/vetsagong/spring/nanosam/yolo/custom_data/TEST2.jpg"
+image_yolo = jpg_to_image_struct(image_path)
+      
+# JE : making bbox using detector
+start = time.time()
+detections = darknet.detect_image(network, class_names, image_yolo, thresh=.2, nms=.45)
+finish = time.time()
+print("Predicted in %f seconds." % (finish - start))
+    
+# JE : Check detections
+print("\n JE : detections ")
+print(detections)
+print("####################################################################\n")
+    
+image_with_boxes, bbox = darknet.draw_boxes(detections, image_yolo, class_colors)
+    
+# Draw mask
+if mask is not None:
+    bin_mask = (mask[0,0].detach().cpu().numpy() < 0)
+        
+    #JE
+    save_coordinates(bin_mask)
+        
+    green_image = np.zeros_like(image_with_boxes)
+    green_image[:, :] = (0, 185, 118)
+    green_image[bin_mask] = 0
+
+    image = cv2.addWeighted(image_with_boxes, 0.4, green_image, 0.6, 0)
+         
+# Draw center
+if point is not None:
+
+    image = cv2.circle(
+        image,
+        point,
+        5,
+        (0, 185, 118),
+         -1
+     )
+     
+cv2.imwrite("/home/vetsagong/spring/nanosam/output_image.jpg", image)
+print("/home/vetsagong/spring/nanosam/output_image.jpg")
+
+cv2.imshow("Segmented Image", image)
+cv2.waitKey(0)
+cv2.destroyAllWindows() """
+
+
+      
+""" **************** VERSION 1 : Inference using yolo image detect***************** 
+    
+cv2.namedWindow('image')
 
 # JE : Segment using bounding box
 def init_track():
@@ -99,55 +179,27 @@ def init_track():
       mask = tracker.init(image_pil, point)
     else :
       print("JE : Failed")
-
-def jpg_to_image_struct(image_path):
-    # Read jpg image
-    
-    width = darknet.network_width(network)
-    height = darknet.network_height(network)
-    darknet_image = darknet.make_image(width, height, 3)
-    
-    image = cv2.imread(image_path)
-    
-    # Convert to RGB format
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image_resized = cv2.resize(image_rgb, (width, height),
-                               interpolation=cv2.INTER_LINEAR)
-    
-    darknet.copy_image_from_bytes(darknet_image, image_resized.tobytes())
-    
-    
-    return darknet_image
-
-
-# Example usage:
-# jpg_file_path = "example.jpg"
-# image_struct = jpg_to_image_struct(jpg_file_path)
-
-cv2.namedWindow('image')
-
+      
 while True:
 
     re, image = cap.read()
       
     if not re:
         break
-
+      
     image_pil = cv2_to_pil(image)
-    #image_yolo = jpg_to_image_struct(image_path)
     image_yolo = pil_to_image(image_pil)
     
-    # JE : making bbox by using detector
+    # JE : making bbox using detector
     start = time.time()
     detections = darknet.detect_image(network, class_names, image_yolo, thresh=.2, nms=.45)
     finish = time.time()
     print("Predicted in %f seconds." % (finish - start))
     
+    # JE : Check detections
     print("\n JE : detections ")
     print(detections)
-    print("##########################\n")
+    print("####################################################################\n")
     
     image_yolo, bbox = darknet.draw_boxes(detections, image_yolo, class_colors)
     
@@ -159,16 +211,16 @@ while True:
     # Draw mask
     if mask is not None:
         bin_mask = (mask[0,0].detach().cpu().numpy() < 0)
+        
+        #JE
+        save_coordinates(bin_mask)
+        
         green_image = np.zeros_like(image)
         green_image[:, :] = (0, 185, 118)
         green_image[bin_mask] = 0
 
         image = cv2.addWeighted(image, 0.4, green_image, 0.6, 0)
-
-    # JE : Draw bounding box
-    #if bbox is not None and bbox != []:
-    #  image = plot_boxes_cv2(image, boxes[0], savename=None, class_names=class_names)
-      
+         
     # Draw center
     if point is not None:
 
@@ -189,7 +241,71 @@ while True:
     elif ret == ord('r'):
         tracker.reset()
         mask = None
-        box = None
+        box = None """
+
+
+""" ***************** VERSION 2 : Inference using mouse click  ****************** """
+    
+def init_track(event,x,y,flags,param):
+    global mask, point
+    if event == cv2.EVENT_LBUTTONDBLCLK:
+        mask = tracker.init(image_pil, point=(x, y))
+        point = (x, y)
+
+
+cv2.namedWindow('image')
+cv2.setMouseCallback('image',init_track)
+
+while True:
+
+    re, image = cap.read()
+
+
+    if not re:
+        break
+
+    image_pil = cv2_to_pil(image)
+
+    if tracker.token is not None:
+        mask, point = tracker.update(image_pil)
+    
+    # Draw mask
+    if mask is not None:
+        bin_mask = (mask[0,0].detach().cpu().numpy() < 0) 
+        
+       
+        
+        green_image = np.zeros_like(image)
+        green_image[:, :] = (0, 185, 118)
+        green_image[bin_mask] = 0
+
+        image = cv2.addWeighted(image, 0.4, green_image, 0.6, 0)
+
+    # Draw center
+    if point is not None:
+        
+        #JE
+        save_coordinates(point)
+        
+        image = cv2.circle(
+            image,
+            point,
+            5,
+            (0, 185, 118),
+            -1
+        )
+
+    cv2.imshow("image", image)
+    cv2.imwrite("output_image.jpg", image)
+    
+    ret = cv2.waitKey(1)
+
+    if ret == ord('q'):
+        break
+    elif ret == ord('r'):
+        tracker.reset()
+        mask = None
+        box = None 
 
 
 cv2.destroyAllWindows()
